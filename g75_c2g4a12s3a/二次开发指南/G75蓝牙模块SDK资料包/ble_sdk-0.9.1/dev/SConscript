@@ -1,0 +1,100 @@
+
+Import('env')
+module_src,module_inc = SConscript(dirs='module',exports = ['env'])
+peripheral_src,peripheral_inc = SConscript(dirs='peripheral',exports = ['env'])
+soc_src,soc_inc,startup_src = SConscript(dirs='soc',exports = ['env'])
+sdk_src = module_src + peripheral_src + soc_src
+sdk_inc = module_inc + peripheral_inc + soc_inc
+sdk_inc += Dir(['.'])
+env.Append(CPPPATH = list(map(lambda x:'#/'+x.srcnode().path,sdk_inc)))
+env['SDK_SRC'] = sdk_src
+env['SDK_STARTUP_SRC'] = startup_src
+
+ble_lib = {}
+mesh_lib = {}
+if not 'mdk' in env['TOOLS']:
+    stack_env = env.Clone()
+    stack = SConscript(dirs='stack',exports=['stack_env'],must_exist=False)
+    if not stack is None:
+        ble_lib = stack[0]
+        mesh_lib = stack[1]
+
+if env['IC']== 'le501x':
+    if ble_lib.get('FW_HEX') is None:
+        env['FW_HEX'] = File('#dev/soc/arm_cm/le501x/bin/fw.hex')
+    else:
+        env['FW_HEX'] = ble_lib['FW_HEX']
+    if ble_lib.get('FW_LIB') is None:
+        env['FW_LIB'] = File('#dev/soc/arm_cm/le501x/bin/libfw.o')
+    else:
+        env['FW_LIB'] = ble_lib['FW_LIB']
+    if mesh_lib.get('FW_MESH_HEX') is None:
+        env['FW_MESH_HEX'] = File('#dev/soc/arm_cm/le501x/bin/fw_with_sig_mesh.hex')
+    else:
+        env['FW_MESH_HEX'] = mesh_lib['FW_MESH_HEX'] 
+    if mesh_lib.get('MESH_LIB') is None:
+        env['MESH_LIB'] = File('#dev/soc/arm_cm/le501x/bin/libmesh.o')
+    else:
+        env['MESH_LIB'] = mesh_lib['MESH_LIB']
+else:
+    env['FW_LIB'] = ble_lib['FW_LIB']
+    env['ROM_SYM'] = ble_lib['ROM_SYM']
+ 
+def image_build(name,src,inc,linkscript = ''):
+    global env
+    img_env = env.Clone()
+    img_env['PROJ_DIR'] = Dir('.')
+    print(img_env['PROJ_DIR'].srcnode().path)
+    src_files = File(src)
+    inc_dirs = Dir(inc)
+    if linkscript != '':
+        img_env['LINKSCRIPT'] = File(linkscript)
+    img_env.Append(CPPPATH = list(map(lambda x:'#/'+x.srcnode().path,inc_dirs)))
+    target_name = '#build/$IC/examples/'+name
+    if img_env['BASE_ARCH'] == 'rv32':
+        startfile_obj = img_env.Object(img_env['SDK_STARTUP_SRC'],CFLAGS = ' -mno-relax $CFLAGS ',OBJPREFIX = name+'-')
+        img_target = img_env.Program(target_name, img_env['SDK_SRC'] + startfile_obj + src_files,OBJPREFIX = name+'-')
+    else:
+        img_target = img_env.Program(target_name, img_env['SDK_SRC'] + img_env['SDK_STARTUP_SRC'] + src_files,OBJPREFIX = name+'-') #compatible to MDK
+    img_env.Depends(img_target,[img_env['LINKSCRIPT']])
+    if not 'mdk' in img_env['TOOLS']:
+        img_env.AddPostAction(img_target,Action('$OBJDUMP -d -z -x $TARGET > ${TARGET.base}.asm'))
+        img_env.Clean(img_target,[target_name+'.asm',target_name+'.hex'])
+
+    return img_env,img_target
+  
+def app_build(app_name,src,inc,linkscript = '',ble = True,mesh = False):
+    app_env,app_target = image_build(app_name,src,inc,linkscript)
+    if mesh:
+        fw_lib = app_env['MESH_LIB']
+    elif ble:
+        fw_lib = app_env['FW_LIB']
+    if app_env['IC'] == 'le501x':
+        if mesh:
+            stack_hex = app_env['FW_MESH_HEX']
+            app_env.Depends(app_target,[stack_hex])
+        elif ble:
+            stack_hex = app_env['FW_HEX']
+            app_env.Depends(app_target,[stack_hex])
+        if not 'mdk' in app_env['TOOLS']:
+            app_hex = app_env.Command('#build/$IC/examples/'+app_name+'.hex',app_target,Action('$OBJCOPY -O ihex $SOURCES $TARGET'))
+            if mesh or ble:
+                app_env.AddPostAction(app_target,Action('$OBJCOPY -O binary $TARGET ${TARGET.base}.ota.bin'))
+                app_env.Command('#build/$IC/examples/'+app_name+'_production.hex',['#build/$IC/examples/info_sbl.hex',app_hex,stack_hex],Action('python tools/hexmerge.py $SOURCES > $TARGET'))
+            else:
+                app_env.Command('#build/$IC/examples/'+app_name+'_production.hex',['#build/$IC/examples/info_sbl.hex',app_hex],Action('python tools/hexmerge.py $SOURCES > $TARGET'))
+        else:
+            if mesh or ble:
+                print(stack_hex.srcnode().path)
+                app_env['STACK_HEX_PATH'] = stack_hex.srcnode().path
+    else:
+        app_env.Append(LINKFLAGS = ' -Wl,-R,' + File(app_env['ROM_SYM'][0]).path)
+        app_env.Depends(app_target,app_env['ROM_SYM'])
+        app_hex = app_env.Command('#build/$IC/examples/'+app_name+'.hex',app_target,Action('$OBJCOPY -O ihex $SOURCES $TARGET'))
+    if mesh or ble:
+        app_env.Append(LIBS = [fw_lib])
+    return app_env,app_target
+
+env.Append(LINKFLAGS = ' $GC_OPTION ')
+SConscript(dirs = 'examples',exports=['app_build','image_build','env'])
+SConscript(dirs = 'bootloader',exports=['env'])

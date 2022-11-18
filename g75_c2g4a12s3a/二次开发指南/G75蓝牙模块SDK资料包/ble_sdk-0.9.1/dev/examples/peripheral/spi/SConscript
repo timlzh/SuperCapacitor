@@ -1,0 +1,4 @@
+Import('app_build')
+SConscript(dirs = 'spi_polling',exports=['app_build'])
+SConscript(dirs = 'spi_it',exports=['app_build'])
+SConscript(dirs = 'spi_dma',exports=['app_build'])

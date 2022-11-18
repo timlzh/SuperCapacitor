@@ -1,0 +1,26 @@
+--cpu Cortex-M3
+"supercap\startup_stm32f103xb.o"
+"supercap\main.o"
+"supercap\stm32f1xx_it.o"
+"supercap\stm32f1xx_hal_msp.o"
+"supercap\stm32f1xx_hal_gpio_ex.o"
+"supercap\stm32f1xx_hal_adc.o"
+"supercap\stm32f1xx_hal_adc_ex.o"
+"supercap\stm32f1xx_hal.o"
+"supercap\stm32f1xx_hal_rcc.o"
+"supercap\stm32f1xx_hal_rcc_ex.o"
+"supercap\stm32f1xx_hal_gpio.o"
+"supercap\stm32f1xx_hal_dma.o"
+"supercap\stm32f1xx_hal_cortex.o"
+"supercap\stm32f1xx_hal_pwr.o"
+"supercap\stm32f1xx_hal_flash.o"
+"supercap\stm32f1xx_hal_flash_ex.o"
+"supercap\stm32f1xx_hal_exti.o"
+"supercap\stm32f1xx_hal_tim.o"
+"supercap\stm32f1xx_hal_tim_ex.o"
+"supercap\stm32f1xx_hal_uart.o"
+"supercap\system_stm32f1xx.o"
+--strict --scatter "superCap\superCap.sct"
+--summary_stderr --info summarysizes --map --load_addr_map_info --xref --callgraph --symbols
+--info sizes --info totals --info unused --info veneers
+--list "superCap.map" -o superCap\superCap.axf

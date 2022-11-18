@@ -1,0 +1,4 @@
+Import('app_build')
+SConscript(dirs = 'uart_polling',exports=['app_build'])
+SConscript(dirs = 'uart_it',exports=['app_build'])
+SConscript(dirs = 'uart_dma',exports=['app_build'])
