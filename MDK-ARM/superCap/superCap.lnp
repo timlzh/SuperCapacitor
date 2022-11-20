@@ -1,5 +1,6 @@
 --cpu Cortex-M3
 "supercap\startup_stm32f103xb.o"
+"supercap\iic_oled.o"
 "supercap\main.o"
 "supercap\stm32f1xx_it.o"
 "supercap\stm32f1xx_hal_msp.o"

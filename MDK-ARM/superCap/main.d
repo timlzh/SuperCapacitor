@@ -30,6 +30,7 @@ supercap\main.o: ../Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_pwr.h
 supercap\main.o: ../Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_tim.h
 supercap\main.o: ../Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_tim_ex.h
 supercap\main.o: ../Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_uart.h
+supercap\main.o: ../Core/Inc/IIC_OLED.h
 supercap\main.o: C:\Keil_v5\ARM\ARMCC\Bin\..\include\math.h
 supercap\main.o: C:\Keil_v5\ARM\ARMCC\Bin\..\include\stdio.h
 supercap\main.o: C:\Keil_v5\ARM\ARMCC\Bin\..\include\stdlib.h

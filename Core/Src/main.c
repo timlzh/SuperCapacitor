@@ -21,6 +21,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "IIC_OLED.h"
 #include "math.h"
 #include "stdio.h"
 #include "stdlib.h"
@@ -35,9 +36,11 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 #define MCU_FREQ 72000000
-#define TIM_FREQ 2
+#define TIM_FREQ 1
 #define CAPACITY 58.5
 #define TIM_TICK (1.0 / TIM_FREQ)
+#define SAMPLE_RESISTANCE 0.1
+#define TIMES 100
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -54,16 +57,17 @@ TIM_HandleTypeDef htim3;
 UART_HandleTypeDef huart1;
 
 /* USER CODE BEGIN PV */
-uint32_t adc_value[1] = {0};
+uint32_t adc_value[256] = {0};
 uint8_t aRxBuffer;                // 接收中断缓冲
 uint8_t Uart1_RxBuff[256] = {0};  // 接收缓冲
 uint8_t Uart1_Rx_Cnt = 0;         // 接收缓冲计数
 uint8_t Uart1_RxFlag = 0;
 uint8_t cAlmStr[] = "数据溢出(大于256)\r\n";
-uint8_t Uart1_TxBuff[256] = {0};  // 发送缓冲
-uint8_t BLEConnected = 0;
+uint8_t Uart1_TxBuff[256] = {0};  // 发�?�缓�????????????????????????
+char msg[256] = {0};
+uint8_t BLEConnected = 0, started = 0;
 uint8_t ADC_DMAFlag = 0;
-float u1 = 0, u2 = 0;
+float u1 = 0, u2 = 0, uSample = 0, remainEnergy = 0, power = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -95,8 +99,8 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
     HAL_UART_Receive_IT(&huart1, (uint8_t *)&aRxBuffer, 1);
 }
 
-void cal_arr_and_psc(float SamplingRate, TIM_TypeDef *TIMx) {
-    uint32_t totalDashed = MCU_FREQ / SamplingRate;
+void cal_arr_and_psc(float SamplingRate, float MCUFreq, TIM_TypeDef *TIMx) {
+    uint32_t totalDashed = MCUFreq / SamplingRate;
     uint32_t sqrtedTotal = (uint32_t)sqrt(totalDashed);
 
     for (uint32_t Prescaler = 2; Prescaler <= sqrtedTotal || Prescaler < 0xffff;
@@ -123,20 +127,13 @@ void cal_arr_and_psc(float SamplingRate, TIM_TypeDef *TIMx) {
 }
 
 void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc) {
-    if (BLEConnected) {
-        if (u1 == 0 && u2 == 0) {
-            u1 = adc_value[0] * 3.3 / 4096;
-            return;
-        }
-        ADC_DMAFlag = 1;
+    if (u1 == 0 && u2 == 0) {
+        u1 = adc_value[0] * 3.3 / 4096;
+        return;
     }
+    ADC_DMAFlag = 1;
 }
 
-// void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
-//     if (htim->Instance == TIM2) {
-//         HAL_
-//     }
-// }
 /* USER CODE END 0 */
 
 /**
@@ -171,14 +168,14 @@ int main(void) {
     MX_TIM3_Init();
     MX_USART1_UART_Init();
     /* USER CODE BEGIN 2 */
-    HAL_UART_Transmit(&huart1, (uint8_t *)"start\r\n", 7, 100);
     HAL_UART_Receive_IT(&huart1, &aRxBuffer, 1);
     HAL_ADCEx_Calibration_Start(&hadc1);
-    cal_arr_and_psc((float)TIM_FREQ, TIM3);
-    // cal_arr_and_psc(1, TIM2);
+    HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_RESET);
     HAL_TIM_Base_Start(&htim3);
     // HAL_TIM_Base_Start_IT(&htim2);
-    HAL_ADC_Start_DMA(&hadc1, adc_value, 1);
+    HAL_ADC_Start_DMA(&hadc1, adc_value, 256);
+    HAL_Delay(1000);
+    OLED_Init();
     /* USER CODE END 2 */
 
     /* Infinite loop */
@@ -188,7 +185,6 @@ int main(void) {
 
         /* USER CODE BEGIN 3 */
         if (Uart1_RxFlag != 0) {
-            // HAL_UART_Transmit(&huart1, (uint8_t *)Uart1_RxBuff, Uart1_Rx_Cnt, 100);
             if (strstr((char *)Uart1_RxBuff, "LINK_ID") != NULL) {
                 HAL_UART_Transmit(&huart1, (uint8_t *)"AT+BT_TRANS=1\r\n", 15, 100);
                 BLEConnected = 1;
@@ -196,20 +192,41 @@ int main(void) {
             if (strstr((char *)Uart1_RxBuff, "DISCONN") != NULL) {
                 BLEConnected = 0;
             }
+            if (strstr((char *)Uart1_RxBuff, "start") != NULL) {
+                HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_SET);
+                started = 1;
+            }
             Uart1_RxFlag = 0;
             Uart1_Rx_Cnt = 0;
             memset(Uart1_RxBuff, 0x00, 256);
         }
         if (ADC_DMAFlag) {
-            u2 = adc_value[0] * 3.3 / 4096;
-            float remainEnergy = CAPACITY * u2 * u2 / 2;
-            float power = (float)CAPACITY * (u2 * u2 - u1 * u1) / (2 * TIM_TICK);
+            // adc_value[2n]: ADC_CH1
+            // adc_value[2n-1]: ADC_CH2
+            for (int i = 0; i < 256; i += 2)
+                u2 += adc_value[i] * 3.3 / 4096;
+            u2 /= 128;
+            for (int i = 1; i < 256; i += 2)
+                uSample += adc_value[i] * 3.3 / 4096;
+            uSample /= 128;
+            if (u2 <= 1.3) {
+                HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_RESET);
+                started = 0;
+            }
+            remainEnergy = CAPACITY * u2 * u2 / 2;
+            power = 0.2736032 * uSample;
+            if (started == 0) power = 0;
+            // power = (float)CAPACITY * (u2 * u2 - u1 * u1) / (2 * TIM_TICK);
             u1 = u2;
 
+            sprintf(msg, "Energy: %.2fJ  Power: %.2fW", remainEnergy, power);
             if (BLEConnected) {
-                sprintf((char *)Uart1_TxBuff, "Remain Energy: %.2fJ  Power: %.2fW\r\n", remainEnergy, power);
+                sprintf((char *)Uart1_TxBuff, "%s\r\n", msg);
                 HAL_UART_Transmit(&huart1, (uint8_t *)Uart1_TxBuff, strlen((char *)Uart1_TxBuff), 0xFFFF);
             }
+            OLED_Clear();
+            OLED_ShowString(0, 0, (uint8_t *)msg, 16, 1);
+            ADC_DMAFlag = 0;
         }
     }
     /* USER CODE END 3 */
@@ -242,7 +259,7 @@ void SystemClock_Config(void) {
      */
     RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK | RCC_CLOCKTYPE_SYSCLK | RCC_CLOCKTYPE_PCLK1 | RCC_CLOCKTYPE_PCLK2;
     RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
-    RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
+    RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV2;
     RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV2;
     RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
 
@@ -250,7 +267,7 @@ void SystemClock_Config(void) {
         Error_Handler();
     }
     PeriphClkInit.PeriphClockSelection = RCC_PERIPHCLK_ADC;
-    PeriphClkInit.AdcClockSelection = RCC_ADCPCLK2_DIV6;
+    PeriphClkInit.AdcClockSelection = RCC_ADCPCLK2_DIV4;
     if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInit) != HAL_OK) {
         Error_Handler();
     }
@@ -275,12 +292,12 @@ static void MX_ADC1_Init(void) {
     /** Common config
      */
     hadc1.Instance = ADC1;
-    hadc1.Init.ScanConvMode = ADC_SCAN_DISABLE;
+    hadc1.Init.ScanConvMode = ADC_SCAN_ENABLE;
     hadc1.Init.ContinuousConvMode = DISABLE;
     hadc1.Init.DiscontinuousConvMode = DISABLE;
     hadc1.Init.ExternalTrigConv = ADC_EXTERNALTRIGCONV_T3_TRGO;
     hadc1.Init.DataAlign = ADC_DATAALIGN_RIGHT;
-    hadc1.Init.NbrOfConversion = 1;
+    hadc1.Init.NbrOfConversion = 2;
     if (HAL_ADC_Init(&hadc1) != HAL_OK) {
         Error_Handler();
     }
@@ -290,6 +307,14 @@ static void MX_ADC1_Init(void) {
     sConfig.Channel = ADC_CHANNEL_0;
     sConfig.Rank = ADC_REGULAR_RANK_1;
     sConfig.SamplingTime = ADC_SAMPLETIME_1CYCLE_5;
+    if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK) {
+        Error_Handler();
+    }
+
+    /** Configure Regular Channel
+     */
+    sConfig.Channel = ADC_CHANNEL_1;
+    sConfig.Rank = ADC_REGULAR_RANK_2;
     if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK) {
         Error_Handler();
     }
@@ -315,9 +340,9 @@ static void MX_TIM3_Init(void) {
 
     /* USER CODE END TIM3_Init 1 */
     htim3.Instance = TIM3;
-    htim3.Init.Prescaler = 0;
+    htim3.Init.Prescaler = 599;
     htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
-    htim3.Init.Period = 65535;
+    htim3.Init.Period = 59;
     htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
     htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
     if (HAL_TIM_Base_Init(&htim3) != HAL_OK) {
@@ -385,10 +410,33 @@ static void MX_DMA_Init(void) {
  * @retval None
  */
 static void MX_GPIO_Init(void) {
+    GPIO_InitTypeDef GPIO_InitStruct = {0};
+
     /* GPIO Ports Clock Enable */
     __HAL_RCC_GPIOC_CLK_ENABLE();
     __HAL_RCC_GPIOD_CLK_ENABLE();
     __HAL_RCC_GPIOA_CLK_ENABLE();
+    __HAL_RCC_GPIOB_CLK_ENABLE();
+
+    /*Configure GPIO pin Output Level */
+    HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_SET);
+
+    /*Configure GPIO pin Output Level */
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6 | GPIO_PIN_7, GPIO_PIN_RESET);
+
+    /*Configure GPIO pin : PC13 */
+    GPIO_InitStruct.Pin = GPIO_PIN_13;
+    GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+    HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+    /*Configure GPIO pins : PB6 PB7 */
+    GPIO_InitStruct.Pin = GPIO_PIN_6 | GPIO_PIN_7;
+    GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_OD;
+    GPIO_InitStruct.Pull = GPIO_PULLUP;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+    HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 }
 
 /* USER CODE BEGIN 4 */
