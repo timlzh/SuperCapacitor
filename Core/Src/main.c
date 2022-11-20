@@ -172,7 +172,6 @@ int main(void) {
     HAL_ADCEx_Calibration_Start(&hadc1);
     HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_RESET);
     HAL_TIM_Base_Start(&htim3);
-    // HAL_TIM_Base_Start_IT(&htim2);
     HAL_ADC_Start_DMA(&hadc1, adc_value, 256);
     HAL_Delay(1000);
     OLED_Init();
@@ -185,6 +184,7 @@ int main(void) {
 
         /* USER CODE BEGIN 3 */
         if (Uart1_RxFlag != 0) {
+            // 接收串口蓝牙信息, 判断是否连接, 若已连接则开始广播模式
             if (strstr((char *)Uart1_RxBuff, "LINK_ID") != NULL) {
                 HAL_UART_Transmit(&huart1, (uint8_t *)"AT+BT_TRANS=1\r\n", 15, 100);
                 BLEConnected = 1;
@@ -192,40 +192,57 @@ int main(void) {
             if (strstr((char *)Uart1_RxBuff, "DISCONN") != NULL) {
                 BLEConnected = 0;
             }
+
+            // 若蓝牙收到开始信息, 拉高电平, 开始放电
             if (strstr((char *)Uart1_RxBuff, "start") != NULL) {
                 HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_SET);
                 started = 1;
             }
+
+            // 重置串口信息
             Uart1_RxFlag = 0;
             Uart1_Rx_Cnt = 0;
             memset(Uart1_RxBuff, 0x00, 256);
         }
+
+        // DMA完成标志位
         if (ADC_DMAFlag) {
-            // adc_value[2n]: ADC_CH1
-            // adc_value[2n-1]: ADC_CH2
+            // adc_value[2n]: ADC_CH1, 电容电压, 128次采样取平均值
             for (int i = 0; i < 256; i += 2)
                 u2 += adc_value[i] * 3.3 / 4096;
-            u2 /= 128;
-            for (int i = 1; i < 256; i += 2)
-                uSample += adc_value[i] * 3.3 / 4096;
-            uSample /= 128;
+            u2 /= 128; 
+
+            remainEnergy = CAPACITY * u2 * u2 / 2; //利用E = 1/2 * C * U^2的公式计算剩余能量
+            // 若剩余能量小于阈值, 则拉低电平, 停止放电
             if (u2 <= 1.3) {
                 HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_RESET);
                 started = 0;
             }
-            remainEnergy = CAPACITY * u2 * u2 / 2;
-            power = 0.2736032 * uSample;
-            if (started == 0) power = 0;
-            // power = (float)CAPACITY * (u2 * u2 - u1 * u1) / (2 * TIM_TICK);
-            u1 = u2;
+            
+            // adc_value[2n-1]: ADC_CH2, 采样电阻电压, 128次采样取平均值
+            for (int i = 1; i < 256; i += 2)
+                uSample += adc_value[i] * 3.3 / 4096;
+            uSample /= 128;
 
+            power = 0.1597 * uSample * uSample - 0.01121 * uSample + 0.1495; // 计算功率, 功率参数为线性拟合后的参数
+            if (started == 0) power = 0; // 若未开始放电, 功率置零
+
+            // power = (float)CAPACITY * (u2 * u2 - u1 * u1) / (2 * TIM_TICK);
+            // u1 = u2;
+
+            // 储存功率/能量信息
             sprintf(msg, "Energy: %.2fJ  Power: %.2fW", remainEnergy, power);
-            if (BLEConnected) {
-                sprintf((char *)Uart1_TxBuff, "%s\r\n", msg);
-                HAL_UART_Transmit(&huart1, (uint8_t *)Uart1_TxBuff, strlen((char *)Uart1_TxBuff), 0xFFFF);
-            }
+            // OLED打印信息
             OLED_Clear();
             OLED_ShowString(0, 0, (uint8_t *)msg, 16, 1);
+            // 如果已链接蓝牙, 则发送功率/能量信息
+            if (BLEConnected) {
+								// sprintf((char *)Uart1_TxBuff, "%s\r\nVs: %.2f", msg, uSample);
+								sprintf((char *)Uart1_TxBuff, "%s\r\n", msg);
+                HAL_UART_Transmit(&huart1, (uint8_t *)Uart1_TxBuff, strlen((char *)Uart1_TxBuff), 0xFFFF);
+            }
+
+            // 重置标志位
             ADC_DMAFlag = 0;
         }
     }
